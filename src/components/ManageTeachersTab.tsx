@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Teacher, Rombel, UserAccount, Subject } from '../types';
 import { ensureTeacherUserAccount } from '../utils/storage';
+import { syncTeachersAndWalasWithUserAccounts } from '../utils/teacherWalasSync';
 import {
   Search,
   Filter,
@@ -190,15 +191,22 @@ export const ManageTeachersTab: React.FC<ManageTeachersTabProps> = ({
     onShowToast(`Data guru "${updated.nama}" berhasil diperbarui`, 'success');
   };
 
-  // Bulk sync all teachers to user accounts
+  // Bulk sync all teachers and walas to 1 unified user account
   const handleSyncAllTeacherAccounts = () => {
-    let curr = [...users];
-    teachers.forEach((t) => {
-      const { updatedUsers } = ensureTeacherUserAccount(t, curr);
-      curr = updatedUsers;
-    });
-    onSyncUsers(curr);
-    onShowToast(`Berhasil menyinkronkan akun login untuk ${teachers.length} guru!`, 'success');
+    const { updatedUsers, countConsolidated, countCreated } = syncTeachersAndWalasWithUserAccounts(
+      teachers,
+      rombels,
+      users
+    );
+    onSyncUsers(updatedUsers);
+    if (countConsolidated > 0) {
+      onShowToast(
+        `Berhasil menyinkronkan data guru & mengonsolidasi ${countConsolidated} akun duplikat menjadi 1 akun terpadu!`,
+        'success'
+      );
+    } else {
+      onShowToast(`Berhasil menyinkronkan 1 akun login terpadu untuk ${teachers.length} guru & wali kelas!`, 'success');
+    }
   };
 
   // Filtered teachers
@@ -255,10 +263,10 @@ export const ManageTeachersTab: React.FC<ManageTeachersTabProps> = ({
               id="btn-sync-teacher-accounts"
               onClick={handleSyncAllTeacherAccounts}
               className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
-              title="Pastikan semua guru memiliki akun login"
+              title="Satukan akun wali kelas dan guru menjadi 1 akun login terpadu"
             >
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              <span>Sinkron Akun Login Guru</span>
+              <Sparkles className="w-4 h-4 text-emerald-600" />
+              <span>Sinkron 1 Akun Guru & Walas</span>
             </button>
 
             {/* Add Teacher */}

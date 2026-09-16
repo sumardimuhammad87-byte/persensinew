@@ -45,6 +45,11 @@ service cloud.firestore {
       allow write: if isValidId(recordId);
     }
 
+    match /teacher_attendance_records/{recordId} {
+      allow read: if true;
+      allow write: if isValidId(recordId);
+    }
+
     match /tokens/{tokenId} {
       allow read: if true;
       allow write: if isValidId(tokenId);

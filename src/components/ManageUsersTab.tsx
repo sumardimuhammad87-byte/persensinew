@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserAccount, UserRole, Rombel, Student, Teacher } from '../types';
 import { generateMassStudentAccounts } from '../utils/storage';
+import { syncTeachersAndWalasWithUserAccounts } from '../utils/teacherWalasSync';
 import {
   UserPlus,
   Search,
@@ -19,6 +20,7 @@ import {
   Building2,
   Users,
   Check,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ManageUsersTabProps {
@@ -286,6 +288,21 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
     notify(`Sandi akun "${resetModalUser.nama}" berhasil diubah menjadi: "${newPassword}"`, 'success');
   };
 
+  // Consolidate Walas and Guru into 1 unified account
+  const handleConsolidateTeacherWalas = () => {
+    const { updatedUsers, countConsolidated, countCreated } = syncTeachersAndWalasWithUserAccounts(
+      teachers,
+      rombels,
+      users
+    );
+    onSyncMassStudentAccounts(updatedUsers);
+    if (countConsolidated > 0) {
+      notify(`Berhasil mengonsolidasi ${countConsolidated} akun duplikat menjadi 1 akun terpadu Wali Kelas & Guru!`, 'success');
+    } else {
+      notify(`Seluruh akun Wali Kelas & Guru sudah terpadu sempurna (1 orang = 1 akun).`, 'info');
+    }
+  };
+
   // Filtered Users List
   const filteredUsers = users.filter((u) => {
     const matchRole = roleFilter === 'ALL' || u.role === roleFilter;
@@ -311,11 +328,11 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
       case 'admin':
         return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">Admin (Superuser)</span>;
       case 'guru':
-        return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">Guru Piket/Pengajar</span>;
+        return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">Guru Pengajar</span>;
       case 'staf':
         return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-300">Staf TU / Pimpinan</span>;
       case 'walas':
-        return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">Wali Kelas</span>;
+        return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">Wali Kelas & Guru</span>;
       case 'ketua_kelas':
         return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">Ketua Kelas</span>;
       case 'sekretaris':
@@ -373,6 +390,17 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
 
         {isAdmin && (
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Consolidate 1 Account for Walas & Guru */}
+            <button
+              id="btn-consolidate-teacher-walas"
+              onClick={handleConsolidateTeacherWalas}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
+              title="Satukan akun Wali Kelas dan Guru menjadi 1 akun efisien terpadu"
+            >
+              <RefreshCw className="w-4 h-4 text-emerald-600" />
+              <span>Satukan 1 Akun Walas & Guru</span>
+            </button>
+
             {/* Mass Generate Student Accounts */}
             <button
               id="btn-mass-generate-students"
@@ -433,8 +461,8 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
             >
               <option value="ALL">Semua Peran ({users.length})</option>
               <option value="admin">Admin (Superuser)</option>
-              <option value="guru">Guru Piket / Pengajar</option>
-              <option value="walas">Wali Kelas</option>
+              <option value="guru">Guru Pengajar</option>
+              <option value="walas">Wali Kelas & Guru</option>
               <option value="ketua_kelas">Ketua Kelas</option>
               <option value="sekretaris">Sekretaris Kelas</option>
               <option value="staf">Staf Tata Usaha</option>
@@ -686,8 +714,8 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
                     disabled={editingUser.id === currentUser.id && editingUser.role === 'admin'}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
                   >
-                    <option value="guru">Guru Piket / Pengajar</option>
-                    <option value="walas">Wali Kelas</option>
+                    <option value="guru">Guru Pengajar</option>
+                    <option value="walas">Wali Kelas & Guru (1 Akun Terpadu)</option>
                     <option value="staf">Staf Tata Usaha / Pimpinan</option>
                     <option value="ketua_kelas">Ketua Kelas</option>
                     <option value="sekretaris">Sekretaris Kelas</option>
@@ -989,8 +1017,8 @@ export const ManageUsersTab: React.FC<ManageUsersTabProps> = ({
                     onChange={(e) => setFormRole(e.target.value as UserRole)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="guru">Guru Piket / Pengajar</option>
-                    <option value="walas">Wali Kelas</option>
+                    <option value="guru">Guru Pengajar</option>
+                    <option value="walas">Wali Kelas & Guru (1 Akun Terpadu)</option>
                     <option value="staf">Staf Tata Usaha / Pimpinan</option>
                     <option value="ketua_kelas">Ketua Kelas</option>
                     <option value="sekretaris">Sekretaris Kelas</option>

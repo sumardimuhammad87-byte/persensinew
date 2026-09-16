@@ -1,6 +1,8 @@
-import { Student, Rombel, UserAccount, SchoolConfig, AttendanceRecord, AttendanceToken, AttendanceStatus, AttendanceMethod, UserRole, Teacher, Subject, ScheduleItem } from '../types';
+import { Student, Rombel, UserAccount, SchoolConfig, AttendanceRecord, AttendanceToken, AttendanceStatus, AttendanceMethod, UserRole, Teacher, Subject, ScheduleItem, TeacherAttendanceRecord, TeacherAttendanceStatus, DayOfWeek } from '../types';
 import { INITIAL_SCHOOL_CONFIG, INITIAL_ROMBEL, INITIAL_STUDENTS, INITIAL_USERS, INITIAL_TEACHERS, INITIAL_SUBJECTS, INITIAL_SCHEDULES, generateInitialAttendance } from '../data/initialData';
 import { syncRombelOfficersWithUserAccounts } from './officerSync';
+import { syncTeachersAndWalasWithUserAccounts } from './teacherWalasSync';
+export { syncTeachersAndWalasWithUserAccounts };
 
 const KEYS = {
   CONFIG: 'absensi_school_config_v1',
@@ -13,6 +15,7 @@ const KEYS = {
   TEACHERS: 'absensi_teachers_v1',
   SUBJECTS: 'absensi_subjects_v1',
   SCHEDULES: 'absensi_schedules_v1',
+  TEACHER_ATTENDANCE: 'absensi_teacher_records_v1',
 };
 
 export function getTodayDateStr(): string {
@@ -136,14 +139,16 @@ export function loadUserList(): UserAccount[] {
     console.error('[Storage] Gagal memuat UserList:', e);
   }
 
-  // Ensure single account consolidation for students & officers
+  // Ensure single account consolidation for students & officers, and Walas & Teachers
   try {
     const rombels = loadRombelList();
     const students = loadStudentList();
-    const synced = syncRombelOfficersWithUserAccounts(rombels, students, list);
-    return synced.updatedUsers;
+    const teachers = loadTeacherList();
+    const officerSynced = syncRombelOfficersWithUserAccounts(rombels, students, list);
+    const teacherWalasSynced = syncTeachersAndWalasWithUserAccounts(teachers, rombels, officerSynced.updatedUsers);
+    return teacherWalasSynced.updatedUsers;
   } catch (err) {
-    console.warn('[Storage] Officer sync error:', err);
+    console.warn('[Storage] Officer/Teacher consolidation sync error:', err);
     return list;
   }
 }
@@ -551,48 +556,43 @@ export function saveTeacherList(list: Teacher[]): void {
   safeSetItem(KEYS.TEACHERS, JSON.stringify(list));
 }
 
-// Helper: Ensure a Teacher has an active UserAccount
+// Helper: Ensure a Teacher has an active UserAccount (consolidated 1 account for Walas & Guru)
 export function ensureTeacherUserAccount(
   teacher: Teacher,
   existingUsers: UserAccount[]
 ): { updatedUsers: UserAccount[]; createdUser: UserAccount } {
-  const cleanNip = teacher.nip.replace(/\s+/g, '');
-  const existingIdx = existingUsers.findIndex(
-    (u) => u.id === `USR-GUR-${teacher.id}` || (u.email && u.email.toLowerCase() === teacher.email.toLowerCase())
+  const rombels = loadRombelList();
+  const { updatedUsers } = syncTeachersAndWalasWithUserAccounts([teacher], rombels, existingUsers);
+  saveUserList(updatedUsers);
+
+  const matched =
+    updatedUsers.find((u) => u.teacherId === teacher.id) ||
+    updatedUsers.find((u) => u.id === `USR-GUR-${teacher.id}`) ||
+    updatedUsers[0];
+
+  return { updatedUsers, createdUser: matched };
+}
+
+// Mass Sync / Ensure all Teachers and Walas have exactly 1 consolidated UserAccount
+export function syncAllTeacherAccounts(
+  teachers: Teacher[],
+  existingUsers: UserAccount[],
+  rombels?: Rombel[]
+): { updatedUsers: UserAccount[]; countAdded: number; countUpdated: number; countSynced: number } {
+  const currentRombels = rombels || loadRombelList();
+  const { updatedUsers, countCreated, countConsolidated } = syncTeachersAndWalasWithUserAccounts(
+    teachers,
+    currentRombels,
+    existingUsers
   );
+  saveUserList(updatedUsers);
 
-  if (existingIdx >= 0) {
-    const updated = [...existingUsers];
-    updated[existingIdx] = {
-      ...updated[existingIdx],
-      nama: teacher.nama,
-      email: teacher.email,
-      telepon: teacher.telepon,
-      rombelId: teacher.rombelWaliKelasId,
-      role: teacher.rombelWaliKelasId ? 'walas' : 'guru',
-      jabatan: teacher.rombelWaliKelasId ? 'Wali Kelas & Guru Pengajar' : 'Guru Pengajar',
-      statusAktif: teacher.statusAktif,
-    };
-    saveUserList(updated);
-    return { updatedUsers: updated, createdUser: updated[existingIdx] };
-  }
-
-  const newUser: UserAccount = {
-    id: `USR-GUR-${teacher.id}`,
-    email: teacher.email,
-    username: cleanNip || teacher.id.toLowerCase(),
-    nama: teacher.nama,
-    role: teacher.rombelWaliKelasId ? 'walas' : 'guru',
-    password: 'guru123',
-    rombelId: teacher.rombelWaliKelasId,
-    jabatan: teacher.rombelWaliKelasId ? 'Wali Kelas & Guru Pengajar' : 'Guru Pengajar',
-    telepon: teacher.telepon,
-    statusAktif: teacher.statusAktif,
+  return {
+    updatedUsers,
+    countAdded: countCreated,
+    countUpdated: countConsolidated,
+    countSynced: countCreated + countConsolidated,
   };
-
-  const updated = [newUser, ...existingUsers];
-  saveUserList(updated);
-  return { updatedUsers: updated, createdUser: newUser };
 }
 
 // Remove teacher login account
@@ -693,6 +693,142 @@ export function saveScheduleList(list: ScheduleItem[]): void {
   safeSetItem(KEYS.SCHEDULES, JSON.stringify(list));
 }
 
+// 11. Presensi Guru (Teacher Attendance)
+export function loadTeacherAttendanceRecords(): TeacherAttendanceRecord[] {
+  try {
+    const raw = localStorage.getItem(KEYS.TEACHER_ATTENDANCE);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('[Storage] Gagal memuat TeacherAttendance:', e);
+  }
+  return [];
+}
+
+export function saveTeacherAttendanceRecords(records: TeacherAttendanceRecord[]): void {
+  safeSetItem(KEYS.TEACHER_ATTENDANCE, JSON.stringify(records));
+}
+
+export function recordTeacherAttendance(
+  record: TeacherAttendanceRecord,
+  existingRecords: TeacherAttendanceRecord[] = []
+): TeacherAttendanceRecord[] {
+  const cleanId = record.id || `TATT-${record.tanggal}-${record.teacherId}`;
+  const recordWithId = { ...record, id: cleanId };
+
+  // Check if existing record for this teacher on this date
+  const idx = existingRecords.findIndex(
+    (r) => r.id === cleanId || (r.teacherId === record.teacherId && r.tanggal === record.tanggal)
+  );
+
+  let updated: TeacherAttendanceRecord[];
+  if (idx >= 0) {
+    updated = [...existingRecords];
+    updated[idx] = { ...updated[idx], ...recordWithId };
+  } else {
+    updated = [recordWithId, ...existingRecords];
+  }
+
+  saveTeacherAttendanceRecords(updated);
+  return updated;
+}
+
+export function deleteTeacherAttendanceRecord(
+  id: string,
+  existingRecords: TeacherAttendanceRecord[] = []
+): TeacherAttendanceRecord[] {
+  const filtered = existingRecords.filter((r) => r.id !== id);
+  saveTeacherAttendanceRecords(filtered);
+  return filtered;
+}
+
+// Helper to determine day name in Indonesian (Senin, Selasa, etc.)
+export function getIndonesianDayName(dateInput?: string | Date): DayOfWeek {
+  const d = dateInput
+    ? typeof dateInput === 'string'
+      ? new Date(dateInput.includes('T') ? dateInput : `${dateInput}T00:00:00`)
+      : dateInput
+    : new Date();
+
+  const dayIndex = d.getDay(); // 0 = Minggu, 1 = Senin, ...
+  const dayMap: Record<number, DayOfWeek> = {
+    1: 'Senin',
+    2: 'Selasa',
+    3: 'Rabu',
+    4: 'Kamis',
+    5: 'Jumat',
+    6: 'Sabtu',
+  };
+  return dayMap[dayIndex] || 'Senin';
+}
+
+// Helper to check whether a teacher has teaching hours on a specific day
+export function checkTeacherTeachingHours(
+  teacherId: string,
+  allSchedules: ScheduleItem[],
+  targetDateOrDay?: string | DayOfWeek
+): {
+  hasTeachingHours: boolean;
+  countSessions: number;
+  totalJamPelajaran: number;
+  dayName: DayOfWeek;
+  schedulesToday: ScheduleItem[];
+  allTeacherSchedules: ScheduleItem[];
+  nextSchedule?: { day: DayOfWeek; schedule: ScheduleItem } | null;
+} {
+  const allTeacherSchedules = allSchedules.filter((s) => s.teacherId === teacherId);
+
+  let dayName: DayOfWeek;
+  if (
+    targetDateOrDay === 'Senin' ||
+    targetDateOrDay === 'Selasa' ||
+    targetDateOrDay === 'Rabu' ||
+    targetDateOrDay === 'Kamis' ||
+    targetDateOrDay === 'Jumat' ||
+    targetDateOrDay === 'Sabtu'
+  ) {
+    dayName = targetDateOrDay;
+  } else {
+    dayName = getIndonesianDayName(targetDateOrDay);
+  }
+
+  const schedulesToday = allTeacherSchedules.filter((s) => s.hari === dayName);
+
+  // Sort by jamMulai ascending
+  schedulesToday.sort((a, b) => (a.jamMulai || '').localeCompare(b.jamMulai || ''));
+
+  // Calculate total JP
+  const totalJamPelajaran = schedulesToday.reduce((acc, curr) => acc + (curr.jumlahJam || 2), 0);
+
+  // Find next teaching schedule if today has no teaching hours
+  let nextSchedule: { day: DayOfWeek; schedule: ScheduleItem } | null = null;
+  if (schedulesToday.length === 0 && allTeacherSchedules.length > 0) {
+    const daysOrder: DayOfWeek[] = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const currentIdx = daysOrder.indexOf(dayName);
+    for (let i = 1; i <= 6; i++) {
+      const nextDayIdx = (currentIdx + i) % 6;
+      const nextDayName = daysOrder[nextDayIdx];
+      const found = allTeacherSchedules.find((s) => s.hari === nextDayName);
+      if (found) {
+        nextSchedule = { day: nextDayName, schedule: found };
+        break;
+      }
+    }
+  }
+
+  return {
+    hasTeachingHours: schedulesToday.length > 0,
+    countSessions: schedulesToday.length,
+    totalJamPelajaran,
+    dayName,
+    schedulesToday,
+    allTeacherSchedules,
+    nextSchedule,
+  };
+}
+
 export interface FullBackupPayload {
   version: string;
   exportedAt: string;
@@ -705,6 +841,7 @@ export interface FullBackupPayload {
   teachers?: Teacher[];
   subjects?: Subject[];
   schedules?: ScheduleItem[];
+  teacherAttendanceRecords?: TeacherAttendanceRecord[];
 }
 
 // Export entire system data to portable JSON backup
@@ -721,6 +858,7 @@ export function exportFullDatabaseBackup(): string {
     teachers: loadTeacherList(),
     subjects: loadSubjectList(),
     schedules: loadScheduleList(),
+    teacherAttendanceRecords: loadTeacherAttendanceRecords(),
   };
   return JSON.stringify(payload, null, 2);
 }
@@ -749,6 +887,7 @@ export function importFullDatabaseBackup(rawJson: string): {
     if (Array.isArray(parsed.teachers)) saveTeacherList(parsed.teachers);
     if (Array.isArray(parsed.subjects)) saveSubjectList(parsed.subjects);
     if (Array.isArray(parsed.schedules)) saveScheduleList(parsed.schedules);
+    if (Array.isArray(parsed.teacherAttendanceRecords)) saveTeacherAttendanceRecords(parsed.teacherAttendanceRecords);
 
     return {
       success: true,

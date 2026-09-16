@@ -59,18 +59,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setErrorMessage(null);
 
     setTimeout(() => {
-      // Find matching user by email, username, or NIPD
+      // Find matching user by email, username, NIPD, or NIP
+      const cleanIdWithoutSpaces = cleanId.replace(/\s+/g, '');
+      const cleanIdAlphanumeric = cleanId.replace(/[^a-z0-9]/g, '');
+
       const matchedUser = users.find((u) => {
-        const matchesEmail = u.email && u.email.toLowerCase() === cleanId;
-        const matchesUsername = u.username && u.username.toLowerCase() === cleanId;
-        const matchesNipd = u.nipd && u.nipd.toLowerCase() === cleanId;
-        return matchesEmail || matchesUsername || matchesNipd;
+        const matchesEmail = u.email && u.email.toLowerCase().trim() === cleanId;
+        const matchesUsername = u.username && u.username.toLowerCase().trim() === cleanId;
+        const matchesUsernameNoSpace = u.username && u.username.replace(/\s+/g, '').toLowerCase() === cleanIdWithoutSpaces;
+        const matchesNipd = u.nipd && u.nipd.toLowerCase().trim() === cleanId;
+        const matchesNipdNoDot = u.nipd && u.nipd.replace(/[^a-z0-9]/g, '').toLowerCase() === cleanIdAlphanumeric;
+        return matchesEmail || matchesUsername || matchesUsernameNoSpace || matchesNipd || matchesNipdNoDot;
       });
 
       if (!matchedUser) {
         setIsLoading(false);
         setErrorMessage(
-          'Akun tidak ditemukan. Pastikan Email, Username, atau NIPD yang Anda masukkan benar.'
+          'Akun tidak ditemukan. Pastikan Email, Username, NIP, atau NIPD yang Anda masukkan benar.'
         );
         return;
       }
@@ -82,14 +87,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         return;
       }
 
-      // Password verification (flexible demo support for admin123 / admin / 123)
+      // Password verification (flexible demo support for admin123 / admin / walas123 / guru123 / 123456 / 123)
       const userPassword = matchedUser.password || '123';
       const isPasswordValid =
         cleanPass === userPassword ||
         (matchedUser.role === 'admin' && (cleanPass === 'admin123' || cleanPass === 'admin')) ||
         (matchedUser.role === 'siswa' && cleanPass === '123') ||
         ((matchedUser.role === 'ketua_kelas' || matchedUser.role === 'sekretaris') && cleanPass === '123') ||
-        ((matchedUser.role === 'guru' || matchedUser.role === 'walas') && cleanPass === '123456');
+        ((matchedUser.role === 'guru' || matchedUser.role === 'walas') &&
+          (cleanPass === '123456' || cleanPass === 'walas123' || cleanPass === 'guru123'));
 
       if (!isPasswordValid) {
         setIsLoading(false);

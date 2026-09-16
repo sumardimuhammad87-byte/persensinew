@@ -1,6 +1,6 @@
 {
   "name": "Kehadiranku, bukan kehadiranmu",
-  "description": "Aplikasi Absensi Siswa berbasis Web \u0026 Mobile dengan Hak Akses (Role-Based), Scan QR Code Kamera, Token Absensi, Kelola Rombel \u0026 Siswa, Absensi Manual, Cetak Laporan PDF/Excel \u0026 Kalkulasi Persentase.",
+  "description": "Aplikasi Absensi Siswa & Akun Guru berbasis Web & Mobile dengan Hak Akses (Role-Based), Presensi Mandiri & Jadwal Mengajar Guru, Scan QR Code Kamera, Token Absensi, Kelola Rombel & Siswa, serta Cetak Laporan & Sinkronisasi Cloud Firestore.",
   "requestFramePermissions": [
     "camera"
   ],

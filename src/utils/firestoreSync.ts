@@ -18,6 +18,7 @@ import {
   AttendanceRecord,
   AttendanceToken,
   SchoolConfig,
+  TeacherAttendanceRecord,
 } from '../types';
 import {
   saveStudentList,
@@ -29,6 +30,7 @@ import {
   saveAttendanceRecords,
   saveTokens,
   saveSchoolConfig,
+  saveTeacherAttendanceRecords,
   FullBackupPayload,
 } from './storage';
 
@@ -47,6 +49,7 @@ export interface FirestoreDataCallbacks {
   onAttendanceLoaded?: (data: AttendanceRecord[]) => void;
   onTokensLoaded?: (data: AttendanceToken[]) => void;
   onSchoolConfigLoaded?: (data: SchoolConfig) => void;
+  onTeacherAttendanceLoaded?: (data: TeacherAttendanceRecord[]) => void;
   onInitialSyncComplete?: () => void;
 }
 
@@ -94,10 +97,11 @@ export function subscribeToFirestore(
     attendance: AttendanceRecord[];
     tokens: AttendanceToken[];
     schoolConfig: SchoolConfig;
+    teacherAttendance?: TeacherAttendanceRecord[];
   }
 ) {
   const unsubscribers: (() => void)[] = [];
-  let pendingInitialListeners = 9;
+  let pendingInitialListeners = 10;
 
   const notifyInitialLoaded = () => {
     pendingInitialListeners--;
@@ -403,6 +407,33 @@ export function subscribeToFirestore(
     notifyInitialLoaded();
   }
 
+  // 10. Teacher Attendance Records
+  try {
+    const unsub = onSnapshot(
+      collection(db, 'teacher_attendance_records'),
+      (snap) => {
+        if (snap.empty && initialFallbacks.teacherAttendance && initialFallbacks.teacherAttendance.length > 0) {
+          firestoreSaveBatchChunked('teacher_attendance_records', initialFallbacks.teacherAttendance, (t) => t.id);
+          callbacks.onTeacherAttendanceLoaded?.(initialFallbacks.teacherAttendance);
+          saveTeacherAttendanceRecords(initialFallbacks.teacherAttendance);
+        } else {
+          const items = snap.docs.map((d) => d.data() as TeacherAttendanceRecord);
+          callbacks.onTeacherAttendanceLoaded?.(items);
+          saveTeacherAttendanceRecords(items);
+        }
+        notifyInitialLoaded();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'teacher_attendance_records');
+        notifyInitialLoaded();
+      }
+    );
+    unsubscribers.push(unsub);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, 'teacher_attendance_records');
+    notifyInitialLoaded();
+  }
+
   // Safety fallback: unblock UI within 1.5 seconds if network latency occurs
   const fallbackTimer = setTimeout(() => {
     callbacks.onInitialSyncComplete?.();
@@ -618,6 +649,30 @@ export async function firestoreSaveSchedulesBatch(schedules: ScheduleItem[]): Pr
   return firestoreSaveBatchChunked('schedules', schedules, (sc) => sc.id);
 }
 
+// Teacher Attendance Mutations
+export async function firestoreSaveTeacherAttendance(record: TeacherAttendanceRecord): Promise<void> {
+  try {
+    const cleaned = cleanForFirestore(record);
+    const docId = sanitizeDocId(record.id);
+    await setDoc(doc(db, 'teacher_attendance_records', docId), cleaned, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `teacher_attendance_records/${record.id}`);
+  }
+}
+
+export async function firestoreDeleteTeacherAttendance(recordId: string): Promise<void> {
+  try {
+    const docId = sanitizeDocId(recordId);
+    await deleteDoc(doc(db, 'teacher_attendance_records', docId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `teacher_attendance_records/${recordId}`);
+  }
+}
+
+export async function firestoreSaveTeacherAttendanceBatch(records: TeacherAttendanceRecord[]): Promise<void> {
+  return firestoreSaveBatchChunked('teacher_attendance_records', records, (r) => r.id);
+}
+
 // Reconciles Firestore collection with new list: removes obsolete docs and writes updated items
 async function reconcileCollection<T>(
   collectionName: string,
@@ -680,6 +735,10 @@ export async function firestoreRestoreFullBackup(payload: FullBackupPayload): Pr
     // 9. Tokens
     if (payload.tokens && payload.tokens.length > 0) {
       await reconcileCollection('tokens', payload.tokens, (tk) => tk.id);
+    }
+    // 10. Teacher Attendance Records
+    if (payload.teacherAttendanceRecords && payload.teacherAttendanceRecords.length > 0) {
+      await reconcileCollection('teacher_attendance_records', payload.teacherAttendanceRecords, (tr) => tr.id);
     }
     return true;
   } catch (err) {

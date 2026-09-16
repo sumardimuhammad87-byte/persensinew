@@ -10,6 +10,7 @@ import {
   Teacher,
   Subject,
   ScheduleItem,
+  TeacherAttendanceRecord,
 } from './types';
 import {
   loadStudentList,
@@ -45,6 +46,11 @@ import {
   saveScheduleList,
   ensureTeacherUserAccount,
   removeTeacherUserAccount,
+  loadTeacherAttendanceRecords,
+  saveTeacherAttendanceRecords,
+  recordTeacherAttendance,
+  deleteTeacherAttendanceRecord,
+  syncAllTeacherAccounts,
 } from './utils/storage';
 import { syncRombelOfficersWithUserAccounts } from './utils/officerSync';
 import { getHolidayInfo, formatIndonesianDateWithDay } from './utils/holidays';
@@ -72,6 +78,8 @@ import {
   firestoreSaveUsersBatch,
   firestoreSaveStudentsBatch,
   firestoreRestoreFullBackup,
+  firestoreSaveTeacherAttendance,
+  firestoreDeleteTeacherAttendance,
 } from './utils/firestoreSync';
 
 // Subcomponents
@@ -86,6 +94,7 @@ import { ManageTeachersTab } from './components/ManageTeachersTab';
 import { ManageSubjectsAndScheduleTab } from './components/ManageSubjectsAndScheduleTab';
 import { ReportsPrintTab } from './components/ReportsPrintTab';
 import { StudentPortalTab } from './components/StudentPortalTab';
+import { TeacherPortalTab } from './components/TeacherPortalTab';
 import { QRScannerModal } from './components/QRScannerModal';
 import { TokenManagerModal } from './components/TokenManagerModal';
 import { StudentCardModal } from './components/StudentCardModal';
@@ -126,6 +135,7 @@ import {
   CreditCard,
   Cake,
   PartyPopper,
+  Briefcase,
 } from 'lucide-react';
 
 export default function App() {
@@ -138,6 +148,9 @@ export default function App() {
   const [schedules, setSchedules] = useState<ScheduleItem[]>(() => loadScheduleList());
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() =>
     loadAttendanceRecords()
+  );
+  const [teacherAttendanceRecords, setTeacherAttendanceRecords] = useState<TeacherAttendanceRecord[]>(() =>
+    loadTeacherAttendanceRecords()
   );
   const [tokens, setTokens] = useState<AttendanceToken[]>(() => loadTokens());
   const [schoolConfig, setSchoolConfig] = useState<SchoolConfig>(() => loadSchoolConfig());
@@ -190,6 +203,8 @@ export default function App() {
     setCurrentUser(finalUser);
     if (finalUser.role === 'siswa') {
       setActiveTab('student_portal');
+    } else if (finalUser.role === 'guru') {
+      setActiveTab('teacher_portal');
     } else {
       setActiveTab('attendance');
     }
@@ -220,6 +235,7 @@ export default function App() {
     saveScheduleList(schedules);
     saveSchoolConfig(schoolConfig);
     saveAttendanceRecords(attendanceRecords);
+    saveTeacherAttendanceRecords(teacherAttendanceRecords);
     saveTokens(tokens);
 
     saveCurrentUser(null);
@@ -228,7 +244,7 @@ export default function App() {
   };
 
   // Navigation Tab
-  // Options: 'attendance', 'students', 'rombel', 'users', 'reports', 'student_portal'
+  // Options: 'attendance', 'students', 'rombel', 'users', 'reports', 'student_portal', 'teacher_portal'
   const [activeTab, setActiveTab] = useState<string>('attendance');
 
   // Modals state
@@ -268,6 +284,10 @@ export default function App() {
   useEffect(() => {
     saveAttendanceRecords(attendanceRecords);
   }, [attendanceRecords]);
+
+  useEffect(() => {
+    saveTeacherAttendanceRecords(teacherAttendanceRecords);
+  }, [teacherAttendanceRecords]);
 
   useEffect(() => {
     saveTokens(tokens);
@@ -333,6 +353,10 @@ export default function App() {
           setAttendanceRecords(data);
           setIsCloudSynced(true);
         },
+        onTeacherAttendanceLoaded: (data) => {
+          setTeacherAttendanceRecords(data);
+          setIsCloudSynced(true);
+        },
         onTokensLoaded: (data) => {
           setTokens(data);
           setIsCloudSynced(true);
@@ -356,6 +380,7 @@ export default function App() {
         attendance: attendanceRecords,
         tokens,
         schoolConfig,
+        teacherAttendance: teacherAttendanceRecords,
       }
     );
 
@@ -839,6 +864,30 @@ export default function App() {
     showToast('Data guru berhasil dihapus.', 'info');
   };
 
+  // Teacher Attendance Handlers (Presensi Guru Mandiri & Sinkronisasi)
+  const handleRecordTeacherAttendance = (record: TeacherAttendanceRecord) => {
+    const next = recordTeacherAttendance(record);
+    setTeacherAttendanceRecords(next);
+    saveTeacherAttendanceRecords(next);
+    firestoreSaveTeacherAttendance(record);
+  };
+
+  const handleDeleteTeacherAttendance = (recordId: string) => {
+    const next = deleteTeacherAttendanceRecord(recordId);
+    setTeacherAttendanceRecords(next);
+    saveTeacherAttendanceRecords(next);
+    firestoreDeleteTeacherAttendance(recordId);
+    showToast('Rekaman presensi guru berhasil dihapus.', 'info');
+  };
+
+  const handleSyncAllTeacherAccounts = () => {
+    const { updatedUsers, countSynced } = syncAllTeacherAccounts(teachers, users);
+    setUsers(updatedUsers);
+    saveUserList(updatedUsers);
+    firestoreSaveUsersBatch(updatedUsers);
+    showToast(`Berhasil menyinkronkan akun login untuk ${countSynced} guru!`, 'success');
+  };
+
   // Subject Handlers (CRUD Mapel)
   const handleAddSubject = (s: Subject) => {
     const next = [...subjects, s];
@@ -1273,6 +1322,22 @@ export default function App() {
                     </button>
                   )}
 
+                  {/* TAB: Akun & Jadwal Guru (Admin & Guru) */}
+                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                    <button
+                      id="tab-nav-teacher-portal"
+                      onClick={() => setActiveTab('teacher_portal')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
+                        activeTab === 'teacher_portal'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      <Briefcase className="w-4 h-4 text-emerald-400" />
+                      {currentUser.role === 'guru' ? 'Akun & Jadwal Guru' : 'Portal Guru'}
+                    </button>
+                  )}
+
                   {/* TAB: CRUD Jadwal & Mapel */}
                   <button
                     id="tab-nav-schedules"
@@ -1539,6 +1604,20 @@ export default function App() {
                       Data Guru ({teachers.length})
                     </button>
                   )}
+                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                    <button
+                      onClick={() => {
+                        setActiveTab('teacher_portal');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full text-left py-2 px-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+                        activeTab === 'teacher_portal' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <Briefcase className="w-4 h-4 text-emerald-400" />
+                      {currentUser.role === 'guru' ? 'Akun & Jadwal Guru' : 'Portal Guru'}
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setActiveTab('schedules');
@@ -1799,9 +1878,41 @@ export default function App() {
             teachers={teachers}
             subjects={subjects}
             rombels={rombels}
+            users={users}
             onAddTeacher={handleAddTeacher}
             onUpdateTeacher={handleUpdateTeacher}
             onDeleteTeacher={handleDeleteTeacher}
+            onSyncUsers={(updatedList) => {
+              setUsers(updatedList);
+              saveUserList(updatedList);
+              firestoreSaveUsersBatch(updatedList);
+            }}
+            onShowToast={showToast}
+          />
+        )}
+
+        {/* TAB 2E: Akun & Jadwal Guru (Kehadiran Masing-Masing Guru & Status Jam Mengajar) */}
+        {activeTab === 'teacher_portal' && (currentUser.role === 'admin' || currentUser.role === 'guru') && (
+          <TeacherPortalTab
+            currentUser={currentUser}
+            teachers={teachers}
+            schedules={schedules}
+            rombels={rombels}
+            subjects={subjects}
+            teacherAttendanceRecords={teacherAttendanceRecords}
+            schoolConfig={schoolConfig}
+            onRecordAttendance={handleRecordTeacherAttendance}
+            onDeleteAttendanceRecord={handleDeleteTeacherAttendance}
+            onNavigateToClassAttendance={(rombelId) => {
+              setActiveTab('attendance');
+            }}
+            onUpdateCurrentUser={(updated) => {
+              handleUpdateUser(updated);
+              setCurrentUser(updated);
+              saveCurrentUser(updated);
+            }}
+            onSyncAllTeacherAccounts={handleSyncAllTeacherAccounts}
+            onShowToast={showToast}
           />
         )}
 

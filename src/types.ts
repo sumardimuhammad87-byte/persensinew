@@ -35,11 +35,31 @@ export interface UserAccount {
   role: UserRole;
   password?: string;
   nipd?: string;       // For student / class officers
+  teacherId?: string;  // For teachers (Foreign Key to Teacher)
   rombelId?: string;   // For walas, ketua_kelas, sekretaris, siswa
   jabatan?: string;
   foto?: string;
   telepon?: string;
   statusAktif: boolean;
+}
+
+export type TeacherAttendanceStatus = 'hadir' | 'izin' | 'sakit' | 'dinas_luar';
+
+export interface TeacherAttendanceRecord {
+  id: string;                    // e.g. "TATT-2026-09-16-GUR-1789439337778"
+  teacherId: string;             // Foreign Key to Teacher (e.g. "GUR-1789439337778")
+  nip: string;                   // NIP or NUPTK
+  namaGuru: string;              // Full name with title
+  tanggal: string;               // YYYY-MM-DD
+  waktuMasuk: string;            // HH:mm:ss
+  waktuPulang?: string;          // HH:mm:ss
+  status: TeacherAttendanceStatus;
+  metode: 'mandiri' | 'manual_admin' | 'qr_scan';
+  keterangan?: string;
+  adaJamMengajarHariIni: boolean;
+  jumlahJamMengajarHariIni: number;
+  recordedByName?: string;
+  recordedByRole?: UserRole;
 }
 
 export interface AttendanceRecord {
@@ -131,6 +151,7 @@ export interface ScheduleItem {
   subjectId: string;   // Foreign key to Subject
   teacherId: string;   // Foreign key to Teacher
   ruangan: string;     // e.g. "Ruang Kelas X", "Lab Farmasi", "Lab Keperawatan"
+  jumlahJam?: number;  // e.g. 2 JP
   keterangan?: string;
 }
 
