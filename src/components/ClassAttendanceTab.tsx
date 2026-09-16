@@ -91,6 +91,10 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
   const [modalStatus, setModalStatus] = useState<AttendanceStatus>('hadir');
   const [modalNote, setModalNote] = useState<string>('');
 
+  // Modal Konfirmasi Tindakan Massal (Mencegah terisi otomatis atau ketidaksengajaan klik)
+  const [showBulkHadirModal, setShowBulkHadirModal] = useState<boolean>(false);
+  const [showBulkResetModal, setShowBulkResetModal] = useState<boolean>(false);
+
   const getYesterdayDateStr = () => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
@@ -275,8 +279,13 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
     onUpdateAttendance(student.nipd, currentStatus, note, selectedDate);
   };
 
-  // Set Semua Siswa di Rombel Hadir (Fitur Massal Manual oleh Walas/Ketua/Sekretaris/Admin)
+  // Set Semua Siswa di Rombel Hadir (Fitur Massal Manual oleh Walas/Ketua/Sekretaris/Admin - Memerlukan Konfirmasi Aman)
   const handleMarkAllHadir = () => {
+    if (!canEdit) return;
+    setShowBulkHadirModal(true);
+  };
+
+  const confirmBulkMarkHadir = () => {
     if (!canEdit) return;
     const targetNipds = currentStudents.map((s) => s.nipd);
 
@@ -287,25 +296,26 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
         onUpdateAttendance(nipd, 'hadir', undefined, selectedDate);
       });
     }
+    setShowBulkHadirModal(false);
   };
 
-  // Reset Seluruh Siswa di Rombel ke Posisi "Belum Diabsen" (Hapus kesalahan presensi massal)
+  // Reset Seluruh Siswa di Rombel ke Posisi "Belum Diabsen" (Hapus kesalahan presensi massal dengan Konfirmasi Aman)
   const handleResetAllBelumAbsen = () => {
     if (!canEdit) return;
-    if (
-      window.confirm(
-        `Kembalikan semua siswa (${currentStudents.length} siswa) ke status "Belum Diabsen" pada tanggal ${selectedDate}?\n\nPosisinya akan kembali seperti semula belum diabsen.`
-      )
-    ) {
-      const targetNipds = currentStudents.map((s) => s.nipd);
-      if (onBulkResetAttendance) {
-        onBulkResetAttendance(targetNipds, selectedDate);
-      } else if (onResetAttendance) {
-        targetNipds.forEach((nipd) => {
-          onResetAttendance(nipd, selectedDate);
-        });
-      }
+    setShowBulkResetModal(true);
+  };
+
+  const confirmBulkReset = () => {
+    if (!canEdit) return;
+    const targetNipds = currentStudents.map((s) => s.nipd);
+    if (onBulkResetAttendance) {
+      onBulkResetAttendance(targetNipds, selectedDate);
+    } else if (onResetAttendance) {
+      targetNipds.forEach((nipd) => {
+        onResetAttendance(nipd, selectedDate);
+      });
     }
+    setShowBulkResetModal(false);
   };
 
   // Perhitungan statistik rombel aktif
@@ -1436,6 +1446,138 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi: Set Semua Hadir */}
+      {showBulkHadirModal && (
+        <div
+          id="modal-confirm-bulk-hadir"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
+                <UserCheck className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Konfirmasi Set Semua Hadir
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Tindakan ini memerlukan persetujuan eksplisit Anda dan <strong>tidak pernah dijalankan otomatis</strong> saat membuka halaman.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-200 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-600">
+                <span>Rombel Target:</span>
+                <span className="font-bold text-slate-900">
+                  {effectiveRombelId === 'ALL' ? 'Semua Rombel (Seluruh Kelas)' : getRombelName(effectiveRombelId)}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Jumlah Siswa:</span>
+                <span className="font-bold text-emerald-700">{currentStudents.length} Siswa</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Tanggal Presensi:</span>
+                <span className="font-bold text-slate-900">{formatIndonesianDateWithDay(selectedDate)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Metode Pencatatan:</span>
+                <span className="font-bold text-slate-900">
+                  {currentUser.role === 'admin' ? 'Manual Admin' : 'Manual Guru'}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-amber-700 bg-amber-50 p-3 rounded-xl border border-amber-200">
+              ⚠️ Seluruh {currentStudents.length} siswa akan ditandai dengan status <strong>HADIR</strong>. Pastikan Anda benar-benar ingin menandai semua siswa hadir secara manual.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkHadirModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-bold transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmBulkMarkHadir}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
+              >
+                <UserCheck className="w-4 h-4" />
+                Ya, Set Semua Hadir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi: Reset Belum Diabsen */}
+      {showBulkResetModal && (
+        <div
+          id="modal-confirm-bulk-reset"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-600 shrink-0">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Konfirmasi Reset Belum Diabsen
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Kembalikan posisi kehadiran siswa ke keadaan awal <strong>"Belum Diabsen"</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-200 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-600">
+                <span>Rombel Target:</span>
+                <span className="font-bold text-slate-900">
+                  {effectiveRombelId === 'ALL' ? 'Semua Rombel (Seluruh Kelas)' : getRombelName(effectiveRombelId)}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Jumlah Siswa:</span>
+                <span className="font-bold text-slate-900">{currentStudents.length} Siswa</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Tanggal Target:</span>
+                <span className="font-bold text-slate-900">{formatIndonesianDateWithDay(selectedDate)}</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-600 bg-slate-100 p-3 rounded-xl border border-slate-200">
+              ℹ️ Rekaman presensi siswa untuk tanggal ini akan dihapus dan dikembalikan ke status "Belum Diabsen" (tersinkronisasi ke Cloud Firestore).
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkResetModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-bold transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmBulkReset}
+                className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-amber-600/20 cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Ya, Reset Menjadi Belum Diabsen
+              </button>
+            </div>
           </div>
         </div>
       )}
