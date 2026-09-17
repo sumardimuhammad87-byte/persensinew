@@ -95,7 +95,7 @@ export const BirthdayCelebrationModal: React.FC<BirthdayCelebrationModalProps> =
             <p className="font-medium">
               {birthdayWish || (
                 <>
-                  Seluruh keluarga besar <strong>SMKN 1 KELAPA KAMPIT</strong> mengucapkan Selamat Ulang Tahun! Semoga senantiasa diberikan kesehatan yang prima, keberkahan umur, kemudahan dalam menuntut ilmu, dan tercapai seluruh cita-cita Anda.
+                  Seluruh keluarga besar <strong>SMK BAKTI PUTRA MANDIRI</strong> mengucapkan Selamat Ulang Tahun! Semoga senantiasa diberikan kesehatan yang prima, keberkahan umur, kemudahan dalam menuntut ilmu, dan tercapai seluruh cita-cita Anda.
                 </>
               )}
             </p>
