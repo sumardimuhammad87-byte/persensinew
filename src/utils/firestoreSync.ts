@@ -180,6 +180,7 @@ export function subscribeToFirestore(
 
   // 3. Students
   try {
+    let hasMergedInitialStudents = false;
     const unsub = onSnapshot(
       collection(db, 'students'),
       (snap) => {
@@ -189,8 +190,20 @@ export function subscribeToFirestore(
           saveStudentList(initialFallbacks.students);
         } else {
           const items = snap.docs.map((d) => d.data() as Student);
-          callbacks.onStudentsLoaded?.(items);
-          saveStudentList(items);
+          let finalStudents = items;
+          // Merge local students if any were added offline before cloud synced
+          if (!hasMergedInitialStudents && initialFallbacks.students && initialFallbacks.students.length > 0) {
+            hasMergedInitialStudents = true;
+            const missingInCloud = initialFallbacks.students.filter(
+              (ls) => ls && ls.nipd && !items.some((cs) => cs.nipd === ls.nipd)
+            );
+            if (missingInCloud.length > 0) {
+              firestoreSaveBatchChunked('students', missingInCloud, (s) => s.nipd);
+              finalStudents = [...items, ...missingInCloud];
+            }
+          }
+          callbacks.onStudentsLoaded?.(finalStudents);
+          saveStudentList(finalStudents);
         }
         notifyInitialLoaded();
       },
@@ -207,6 +220,7 @@ export function subscribeToFirestore(
 
   // 4. Users
   try {
+    let hasMergedInitialUsers = false;
     const unsub = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -216,8 +230,20 @@ export function subscribeToFirestore(
           saveUserList(initialFallbacks.users);
         } else {
           const items = snap.docs.map((d) => d.data() as UserAccount);
-          callbacks.onUsersLoaded?.(items);
-          saveUserList(items);
+          let finalUsers = items;
+          // Merge local users if any were created offline before cloud synced
+          if (!hasMergedInitialUsers && initialFallbacks.users && initialFallbacks.users.length > 0) {
+            hasMergedInitialUsers = true;
+            const missingInCloud = initialFallbacks.users.filter(
+              (lu) => lu && lu.id && !items.some((cu) => cu.id === lu.id || (cu.username && cu.username === lu.username))
+            );
+            if (missingInCloud.length > 0) {
+              firestoreSaveBatchChunked('users', missingInCloud, (u) => u.id);
+              finalUsers = [...items, ...missingInCloud];
+            }
+          }
+          callbacks.onUsersLoaded?.(finalUsers);
+          saveUserList(finalUsers);
         }
         notifyInitialLoaded();
       },
@@ -234,6 +260,7 @@ export function subscribeToFirestore(
 
   // 5. Teachers (Preserves deletions across all devices)
   try {
+    let hasMergedInitialTeachers = false;
     const unsub = onSnapshot(
       collection(db, 'teachers'),
       (snap) => {
@@ -243,8 +270,20 @@ export function subscribeToFirestore(
           saveTeacherList(initialFallbacks.teachers);
         } else {
           const items = snap.docs.map((d) => d.data() as Teacher);
-          callbacks.onTeachersLoaded?.(items);
-          saveTeacherList(items);
+          let finalTeachers = items;
+          // Merge local teachers if any were created offline
+          if (!hasMergedInitialTeachers && initialFallbacks.teachers && initialFallbacks.teachers.length > 0) {
+            hasMergedInitialTeachers = true;
+            const missingInCloud = initialFallbacks.teachers.filter(
+              (lt) => lt && lt.id && !items.some((ct) => ct.id === lt.id || (ct.nip && ct.nip === lt.nip))
+            );
+            if (missingInCloud.length > 0) {
+              firestoreSaveBatchChunked('teachers', missingInCloud, (t) => t.id);
+              finalTeachers = [...items, ...missingInCloud];
+            }
+          }
+          callbacks.onTeachersLoaded?.(finalTeachers);
+          saveTeacherList(finalTeachers);
         }
         notifyInitialLoaded();
       },
@@ -320,16 +359,10 @@ export function subscribeToFirestore(
       collection(db, 'attendance_records'),
       (snap) => {
         const cloudDocs = snap.docs.map((d) => d.data() as AttendanceRecord);
-        // Exclude ghost records before system official launch date (2026-09-14)
+        // Valid records must have nipd, tanggal, status across ANY dates
         const validCloudRecords = cloudDocs.filter(
-          (r) => r && r.nipd && r.tanggal && r.status && r.tanggal >= '2026-09-14'
+          (r) => r && r.nipd && r.tanggal && r.status
         );
-
-        // Auto clean ghost records in cloud if any exist
-        const ghostDocs = cloudDocs.filter((r) => r && r.tanggal && r.tanggal < '2026-09-14');
-        if (ghostDocs.length > 0) {
-          firestoreDeleteAttendanceRecordsBatch(ghostDocs.map((r) => r.id));
-        }
 
         let currentRecords = validCloudRecords;
 
@@ -338,7 +371,7 @@ export function subscribeToFirestore(
         if (!hasMergedInitialOfflineAttendance) {
           hasMergedInitialOfflineAttendance = true;
           const validOfflineLocal = (initialFallbacks.attendance || []).filter(
-            (lr) => lr && lr.nipd && lr.tanggal && lr.status && lr.tanggal >= '2026-09-14'
+            (lr) => lr && lr.nipd && lr.tanggal && lr.status
           );
 
           if (validOfflineLocal.length > 0 && validCloudRecords.length === 0) {
@@ -409,6 +442,7 @@ export function subscribeToFirestore(
 
   // 10. Teacher Attendance Records
   try {
+    let hasMergedInitialTeacherAttendance = false;
     const unsub = onSnapshot(
       collection(db, 'teacher_attendance_records'),
       (snap) => {
@@ -418,8 +452,19 @@ export function subscribeToFirestore(
           saveTeacherAttendanceRecords(initialFallbacks.teacherAttendance);
         } else {
           const items = snap.docs.map((d) => d.data() as TeacherAttendanceRecord);
-          callbacks.onTeacherAttendanceLoaded?.(items);
-          saveTeacherAttendanceRecords(items);
+          let finalTeacherAttendance = items;
+          if (!hasMergedInitialTeacherAttendance && initialFallbacks.teacherAttendance && initialFallbacks.teacherAttendance.length > 0) {
+            hasMergedInitialTeacherAttendance = true;
+            const missingInCloud = initialFallbacks.teacherAttendance.filter(
+              (lt) => lt && lt.id && !items.some((ct) => ct.id === lt.id || (ct.teacherId === lt.teacherId && ct.tanggal === lt.tanggal))
+            );
+            if (missingInCloud.length > 0) {
+              firestoreSaveBatchChunked('teacher_attendance_records', missingInCloud, (t) => t.id);
+              finalTeacherAttendance = [...items, ...missingInCloud];
+            }
+          }
+          callbacks.onTeacherAttendanceLoaded?.(finalTeacherAttendance);
+          saveTeacherAttendanceRecords(finalTeacherAttendance);
         }
         notifyInitialLoaded();
       },
@@ -744,6 +789,129 @@ export async function firestoreRestoreFullBackup(payload: FullBackupPayload): Pr
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, 'restore_full_backup');
     return false;
+  }
+}
+
+// Manually trigger a fresh full fetch from Firebase Firestore across all collections
+// Bypasses any stale cache and guarantees complete sync across mobile and PC
+export async function forceSyncAllFromCloud(
+  callbacks: FirestoreDataCallbacks
+): Promise<{
+  success: boolean;
+  studentsCount: number;
+  rombelsCount: number;
+  usersCount: number;
+  teachersCount: number;
+  attendanceCount: number;
+  teacherAttendanceCount: number;
+  schedulesCount: number;
+  subjectsCount: number;
+  error?: string;
+}> {
+  try {
+    const [
+      studentsSnap,
+      rombelsSnap,
+      usersSnap,
+      teachersSnap,
+      subjectsSnap,
+      schedulesSnap,
+      attendanceSnap,
+      tokensSnap,
+      teacherAttendanceSnap,
+    ] = await Promise.all([
+      getDocs(collection(db, 'students')),
+      getDocs(collection(db, 'rombels')),
+      getDocs(collection(db, 'users')),
+      getDocs(collection(db, 'teachers')),
+      getDocs(collection(db, 'subjects')),
+      getDocs(collection(db, 'schedules')),
+      getDocs(collection(db, 'attendance_records')),
+      getDocs(collection(db, 'tokens')),
+      getDocs(collection(db, 'teacher_attendance_records')),
+    ]);
+
+    // Parse and update each
+    const students = studentsSnap.docs.map((d) => d.data() as Student);
+    if (students.length > 0) {
+      callbacks.onStudentsLoaded?.(students);
+      saveStudentList(students);
+    }
+
+    const rombels = rombelsSnap.docs.map((d) => d.data() as Rombel);
+    if (rombels.length > 0) {
+      callbacks.onRombelsLoaded?.(rombels);
+      saveRombelList(rombels);
+    }
+
+    const users = usersSnap.docs.map((d) => d.data() as UserAccount);
+    if (users.length > 0) {
+      callbacks.onUsersLoaded?.(users);
+      saveUserList(users);
+    }
+
+    const teachers = teachersSnap.docs.map((d) => d.data() as Teacher);
+    if (teachers.length > 0) {
+      callbacks.onTeachersLoaded?.(teachers);
+      saveTeacherList(teachers);
+    }
+
+    const subjects = subjectsSnap.docs.map((d) => d.data() as Subject);
+    if (subjects.length > 0) {
+      callbacks.onSubjectsLoaded?.(subjects);
+      saveSubjectList(subjects);
+    }
+
+    const schedules = schedulesSnap.docs.map((d) => d.data() as ScheduleItem);
+    if (schedules.length > 0) {
+      callbacks.onSchedulesLoaded?.(schedules);
+      saveScheduleList(schedules);
+    }
+
+    const rawAttendance = attendanceSnap.docs.map((d) => d.data() as AttendanceRecord);
+    const validAttendance = rawAttendance.filter((r) => r && r.nipd && r.tanggal && r.status);
+    // Deduplicate
+    const attMap = new Map<string, AttendanceRecord>();
+    validAttendance.forEach((r) => attMap.set(`${r.nipd.trim()}_${r.tanggal.trim()}`, r));
+    const attendance = Array.from(attMap.values());
+    callbacks.onAttendanceLoaded?.(attendance);
+    saveAttendanceRecords(attendance);
+
+    const tokens = tokensSnap.docs.map((d) => d.data() as AttendanceToken);
+    if (tokens.length > 0) {
+      callbacks.onTokensLoaded?.(tokens);
+      saveTokens(tokens);
+    }
+
+    const teacherAttendance = teacherAttendanceSnap.docs.map((d) => d.data() as TeacherAttendanceRecord);
+    callbacks.onTeacherAttendanceLoaded?.(teacherAttendance);
+    saveTeacherAttendanceRecords(teacherAttendance);
+
+    return {
+      success: true,
+      studentsCount: students.length,
+      rombelsCount: rombels.length,
+      usersCount: users.length,
+      teachersCount: teachers.length,
+      attendanceCount: attendance.length,
+      teacherAttendanceCount: teacherAttendance.length,
+      schedulesCount: schedules.length,
+      subjectsCount: subjects.length,
+    };
+  } catch (err) {
+    const errInfo = handleFirestoreError(err, OperationType.GET, 'force_sync_all');
+    return {
+      success: false,
+      studentsCount: 0,
+      rombelsCount: 0,
+      usersCount: 0,
+      teachersCount: 0,
+      attendanceCount: 0,
+      teacherAttendanceCount: 0,
+      schedulesCount: 0,
+      subjectsCount: 0,
+      error: errInfo.error,
+    };
   }
 }
 

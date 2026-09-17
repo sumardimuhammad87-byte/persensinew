@@ -7,6 +7,8 @@ import {
   AttendanceMethod,
   UserAccount,
   SchoolConfig,
+  Teacher,
+  ScheduleItem,
 } from '../types';
 import { getCurrentTimeStr, getTodayDateStr, generateAttendanceRecordId } from '../utils/storage';
 import { getHolidayInfo, formatIndonesianDateWithDay } from '../utils/holidays';
@@ -52,6 +54,8 @@ interface ClassAttendanceTabProps {
   onSelectStudentCard: (student: Student) => void;
   onNavigateToCrud?: () => void;
   schoolConfig?: SchoolConfig;
+  teachers?: Teacher[];
+  schedules?: ScheduleItem[];
 }
 
 export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
@@ -72,6 +76,8 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
   onSelectStudentCard,
   onNavigateToCrud,
   schoolConfig,
+  teachers,
+  schedules,
 }) => {
   // Date state (internal or controlled via props)
   const todayStr = getTodayDateStr();
@@ -160,11 +166,12 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
   };
 
   // =========================================================================
-  // LOGIKA DASHBOARD ROLE-BASED: WALAS, KETUA KELAS, & SEKRETARIS
+  // LOGIKA DASHBOARD ROLE-BASED: WALAS, KETUA KELAS, SEKRETARIS, & GURU
   // =========================================================================
   const isWalas = currentUser.role === 'walas';
   const isKetuaKelas = currentUser.role === 'ketua_kelas';
   const isSekretaris = currentUser.role === 'sekretaris';
+  const isGuru = currentUser.role === 'guru';
   const isRombelLeader = isWalas || isKetuaKelas || isSekretaris;
 
   // Temukan rombel yang dipimpin/ditugaskan berdasarkan ID rombel akun atau pencocokan penugasan
@@ -183,26 +190,86 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
 
   const assignedRombelId = assignedRombel?.id || 'ROMBEL-XI-FAR';
 
+  // Temukan profil guru yang cocok untuk currentUser
+  const teacherMatch = useMemo(() => {
+    if (!isGuru && !isWalas) return null;
+    return (
+      teachers?.find(
+        (t) =>
+          (currentUser.teacherId && t.id === currentUser.teacherId) ||
+          t.id === currentUser.id.replace('USR-GUR-', '') ||
+          (t.email && currentUser.email && t.email.toLowerCase().trim() === currentUser.email.toLowerCase().trim()) ||
+          (t.nama && currentUser.nama && t.nama.toLowerCase().trim() === currentUser.nama.toLowerCase().trim()) ||
+          (t.nip && currentUser.username && t.nip.replace(/\s+/g, '') === currentUser.username.replace(/\s+/g, ''))
+      ) || null
+    );
+  }, [isGuru, isWalas, teachers, currentUser]);
+
+  // Daftar rombel yang diampu oleh Guru (sesuai jadwal & perwalian)
+  const taughtRombelIds = useMemo(() => {
+    if (currentUser.role === 'admin') {
+      return rombels.map((r) => r.id);
+    }
+    if (isRombelLeader) {
+      return [assignedRombelId];
+    }
+    if (isGuru) {
+      const list: string[] = [];
+      if (teacherMatch?.rombelWaliKelasId) list.push(teacherMatch.rombelWaliKelasId);
+      if (currentUser.rombelId && !list.includes(currentUser.rombelId)) list.push(currentUser.rombelId);
+      if (teacherMatch && schedules) {
+        schedules.forEach((s) => {
+          if (s.teacherId === teacherMatch.id && !list.includes(s.rombelId)) {
+            list.push(s.rombelId);
+          }
+        });
+      }
+      if (list.length === 0 && rombels.length > 0) {
+        list.push(rombels[0].id);
+      }
+      return list;
+    }
+    return rombels.map((r) => r.id);
+  }, [currentUser, isRombelLeader, assignedRombelId, isGuru, teacherMatch, schedules, rombels]);
+
   // State Rombel aktif:
-  // Jika role adalah 'walas', 'ketua_kelas', atau 'sekretaris', KUNCI AKSES hanya ke rombel yang dipimpin!
-  const [activeRombelId, setActiveRombelId] = useState<string>(
-    isRombelLeader ? assignedRombelId : 'ALL'
-  );
+  // Walas/Ketua/Sekretaris terkunci ke kelas pimpinan.
+  // Guru hanya dapat memilih kelas yang mereka ampu!
+  const [activeRombelId, setActiveRombelId] = useState<string>(() => {
+    if (isRombelLeader) return assignedRombelId;
+    if (isGuru) return taughtRombelIds[0] || 'ALL';
+    return 'ALL';
+  });
 
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   // Batasan Akses Data Siswa:
-  // Untuk walas, ketua_kelas, dan sekretaris, STRICTLY LOCK ke data rombel yang dipimpin!
-  const effectiveRombelId = isRombelLeader ? assignedRombelId : activeRombelId;
-
-  const currentStudents = students.filter((s) => {
-    if (isRombelLeader) {
-      return s.rombelId === assignedRombelId;
+  // Walas: strictly kelas pimpinan.
+  // Guru: strictly kelas yang diampu saja!
+  const effectiveRombelId = useMemo(() => {
+    if (isRombelLeader) return assignedRombelId;
+    if (isGuru) {
+      if (taughtRombelIds.includes(activeRombelId)) return activeRombelId;
+      return taughtRombelIds[0] || '';
     }
-    if (effectiveRombelId === 'ALL') return true;
-    return s.rombelId === effectiveRombelId;
-  });
+    return activeRombelId;
+  }, [isRombelLeader, assignedRombelId, isGuru, taughtRombelIds, activeRombelId]);
+
+  const currentStudents = useMemo(() => {
+    return students.filter((s) => {
+      if (isRombelLeader) {
+        return s.rombelId === assignedRombelId;
+      }
+      if (isGuru) {
+        if (!taughtRombelIds.includes(s.rombelId)) return false;
+        if (effectiveRombelId !== 'ALL' && s.rombelId !== effectiveRombelId) return false;
+        return true;
+      }
+      if (effectiveRombelId === 'ALL') return true;
+      return s.rombelId === effectiveRombelId;
+    });
+  }, [students, isRombelLeader, assignedRombelId, isGuru, taughtRombelIds, effectiveRombelId]);
 
   // Filter rekaman absensi pada tanggal yang dipilih
   const dateRecords = attendanceRecords.filter((r) => r.tanggal === selectedDate);
@@ -233,12 +300,13 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
   );
 
   // Hak mengedit:
-  // Admin & Guru: Berwenang di semua rombel
+  // Admin & Staf: Berwenang di semua rombel
+  // Guru: Berwenang HANYA pada kelas yang diampu!
   // Walas, Ketua, Sekretaris: Berwenang HANYA pada rombel yang mereka pimpin!
   const canEdit =
     currentUser.role === 'admin' ||
-    currentUser.role === 'guru' ||
     currentUser.role === 'staf' ||
+    (isGuru && taughtRombelIds.includes(effectiveRombelId)) ||
     (isRombelLeader && effectiveRombelId === assignedRombelId);
 
   // Ubah status manual satu siswa
@@ -595,6 +663,13 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
                 <strong className="font-bold text-emerald-800">{assignedRombel.nama}</strong>
               </span>
             </div>
+          ) : isGuru ? (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 border border-teal-200 text-teal-900 text-xs font-medium">
+              <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+              <span>
+                Ruang Lingkup Guru: <strong className="font-bold text-teal-800">Kelas yang Diampu</strong> ({taughtRombelIds.length} Rombel)
+              </span>
+            </div>
           ) : (
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs font-medium">
               <ShieldCheck className="w-3.5 h-3.5 text-slate-600" />
@@ -767,8 +842,8 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
           rombel yang mereka pimpin! Pilihan 'Semua Kelas' dan kelas lain disembunyikan.
          ========================================================================= */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-        {/* Tombol 'Semua Kelas' hanya tersedia untuk Admin dan Guru */}
-        {!isRombelLeader && (
+        {/* Tombol 'Semua Kelas' hanya tersedia untuk Admin dan Staf */}
+        {!isRombelLeader && !isGuru && (
           <button
             id="tab-rombel-all"
             onClick={() => setActiveRombelId('ALL')}
@@ -789,6 +864,12 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
           // JIKA PENGGUNA ADALAH WALAS, KETUA KELAS, ATAU SEKRETARIS:
           // Sembunyikan kelas lain, batasi akses strictly ke rombel pimpinan mereka!
           if (isRombelLeader && rombel.id !== assignedRombelId) {
+            return null;
+          }
+
+          // JIKA PENGGUNA ADALAH GURU:
+          // Sembunyikan kelas yang TIDAK diampu oleh guru yang bersangkutan!
+          if (isGuru && !taughtRombelIds.includes(rombel.id)) {
             return null;
           }
 
@@ -814,6 +895,11 @@ export const ClassAttendanceTab: React.FC<ClassAttendanceTabProps> = ({
               {isRombelLeader && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-800 text-emerald-100 font-bold">
                   Kelas Anda
+                </span>
+              )}
+              {isGuru && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-800 text-teal-100 font-bold">
+                  Diampu
                 </span>
               )}
               <span

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserAccount, SchoolConfig } from '../types';
+import { UserAccount, SchoolConfig, Student } from '../types';
 import {
   Lock,
   User,
@@ -21,16 +21,20 @@ import {
 
 interface LoginPageProps {
   users: UserAccount[];
+  students?: Student[];
   schoolConfig: SchoolConfig;
   onLoginSuccess: (user: UserAccount) => void;
+  onAutoCreateUser?: (user: UserAccount) => void;
   onOpenArchDocs?: () => void;
   onOpenBackupModal?: () => void;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({
   users,
+  students = [],
   schoolConfig,
   onLoginSuccess,
+  onAutoCreateUser,
   onOpenArchDocs,
   onOpenBackupModal,
 }) => {
@@ -46,7 +50,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     const cleanPass = passInput.trim();
 
     if (!cleanId) {
-      setErrorMessage('Silakan masukkan Email, Username, atau NIPD Anda.');
+      setErrorMessage('Silakan masukkan NISN, NIPD, Email, atau Username Anda.');
       return;
     }
 
@@ -59,23 +63,76 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setErrorMessage(null);
 
     setTimeout(() => {
-      // Find matching user by email, username, NIPD, or NIP
+      // Find matching user by email, username, NIPD, NISN, nama, or NIP
       const cleanIdWithoutSpaces = cleanId.replace(/\s+/g, '');
       const cleanIdAlphanumeric = cleanId.replace(/[^a-z0-9]/g, '');
+      const cleanIdDigits = cleanId.replace(/\D/g, '');
 
-      const matchedUser = users.find((u) => {
+      // 1. Search existing user accounts
+      let matchedUser = users.find((u) => {
         const matchesEmail = u.email && u.email.toLowerCase().trim() === cleanId;
         const matchesUsername = u.username && u.username.toLowerCase().trim() === cleanId;
         const matchesUsernameNoSpace = u.username && u.username.replace(/\s+/g, '').toLowerCase() === cleanIdWithoutSpaces;
         const matchesNipd = u.nipd && u.nipd.toLowerCase().trim() === cleanId;
         const matchesNipdNoDot = u.nipd && u.nipd.replace(/[^a-z0-9]/g, '').toLowerCase() === cleanIdAlphanumeric;
-        return matchesEmail || matchesUsername || matchesUsernameNoSpace || matchesNipd || matchesNipdNoDot;
+        const matchesNisn = u.nisn && (u.nisn.toLowerCase().trim() === cleanId || (cleanIdDigits && u.nisn.replace(/\D/g, '') === cleanIdDigits));
+        const matchesNama = u.nama && u.nama.toLowerCase().trim() === cleanId;
+        return matchesEmail || matchesUsername || matchesUsernameNoSpace || matchesNipd || matchesNipdNoDot || matchesNisn || matchesNama;
       });
+
+      // 2. Search in student roster (resolves any student missing a pre-generated user account)
+      let matchedStudent: Student | null = null;
+      if (students && students.length > 0) {
+        matchedStudent =
+          students.find((s) => {
+            const sNisn = s.nisn ? s.nisn.toLowerCase().trim() : '';
+            const sNisnDigits = s.nisn ? s.nisn.replace(/\D/g, '') : '';
+            const sNipd = s.nipd ? s.nipd.toLowerCase().trim() : '';
+            const sNipdAlpha = s.nipd ? s.nipd.replace(/[^a-z0-9]/g, '').toLowerCase() : '';
+            const sNama = s.nama ? s.nama.toLowerCase().trim() : '';
+
+            const matchesNisn = sNisn && (sNisn === cleanId || (cleanIdDigits && sNisnDigits === cleanIdDigits));
+            const matchesNipd = sNipd && (sNipd === cleanId || sNipdAlpha === cleanIdAlphanumeric);
+            const matchesNama = sNama && sNama === cleanId;
+            return matchesNisn || matchesNipd || matchesNama;
+          }) || null;
+      }
+
+      // If matched student is found but no user account was matched yet, connect or generate on-the-fly
+      if (matchedStudent) {
+        if (!matchedUser) {
+          matchedUser = users.find(
+            (u) =>
+              (u.nipd && u.nipd.trim().toLowerCase() === matchedStudent!.nipd.trim().toLowerCase()) ||
+              (u.nisn && matchedStudent!.nisn && u.nisn.replace(/\D/g, '') === matchedStudent!.nisn.replace(/\D/g, ''))
+          );
+        }
+
+        if (!matchedUser) {
+          const newAccountId = `USR-STD-${matchedStudent.nipd.replace(/[^a-zA-Z0-9]/g, '')}`;
+          const newAccount: UserAccount = {
+            id: newAccountId,
+            email: `${matchedStudent.nipd.replace(/[^a-zA-Z0-9]/g, '')}@siswa.sch.id`,
+            username: matchedStudent.nisn || matchedStudent.nipd,
+            nama: matchedStudent.nama,
+            role: 'siswa',
+            password: '123',
+            nipd: matchedStudent.nipd,
+            nisn: matchedStudent.nisn,
+            rombelId: matchedStudent.rombelId,
+            jabatan: 'Siswa',
+            foto: matchedStudent.foto,
+            statusAktif: matchedStudent.statusAktif !== false,
+          };
+          matchedUser = newAccount;
+          onAutoCreateUser?.(newAccount);
+        }
+      }
 
       if (!matchedUser) {
         setIsLoading(false);
         setErrorMessage(
-          'Akun tidak ditemukan. Pastikan Email, Username, NIP, atau NIPD yang Anda masukkan benar.'
+          'Akun tidak ditemukan. Pastikan NISN, NIPD, Username, atau Email yang Anda masukkan benar.'
         );
         return;
       }
@@ -87,19 +144,38 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         return;
       }
 
-      // Password verification (flexible demo support for admin123 / admin / walas123 / guru123 / 123456 / 123)
+      // Flexible password verification
       const userPassword = matchedUser.password || '123';
+
+      let isStudentPassword = false;
+      if (matchedUser.role === 'siswa' || matchedUser.role === 'ketua_kelas' || matchedUser.role === 'sekretaris') {
+        const studentNisn = matchedStudent?.nisn || matchedUser.nisn || '';
+        const studentNipd = matchedStudent?.nipd || matchedUser.nipd || '';
+        const birthDateRaw = matchedStudent?.tanggalLahir || '';
+        const birthDateDigits = birthDateRaw.replace(/\D/g, '');
+        const birthDateReversed = birthDateRaw.includes('-')
+          ? birthDateRaw.split('-').reverse().join('')
+          : '';
+
+        isStudentPassword =
+          cleanPass === '123' ||
+          cleanPass === '123456' ||
+          (Boolean(studentNisn) && (cleanPass === studentNisn || cleanPass.replace(/\D/g, '') === studentNisn.replace(/\D/g, ''))) ||
+          (Boolean(studentNipd) && (cleanPass === studentNipd || cleanPass.replace(/[^a-z0-9]/g, '') === studentNipd.replace(/[^a-z0-9]/g, ''))) ||
+          (Boolean(birthDateDigits) && cleanPass === birthDateDigits) ||
+          (Boolean(birthDateReversed) && cleanPass === birthDateReversed);
+      }
+
       const isPasswordValid =
         cleanPass === userPassword ||
+        isStudentPassword ||
         (matchedUser.role === 'admin' && (cleanPass === 'admin123' || cleanPass === 'admin')) ||
-        (matchedUser.role === 'siswa' && cleanPass === '123') ||
-        ((matchedUser.role === 'ketua_kelas' || matchedUser.role === 'sekretaris') && cleanPass === '123') ||
         ((matchedUser.role === 'guru' || matchedUser.role === 'walas') &&
-          (cleanPass === '123456' || cleanPass === 'walas123' || cleanPass === 'guru123'));
+          (cleanPass === '123456' || cleanPass === 'walas123' || cleanPass === 'guru123' || cleanPass === '123'));
 
       if (!isPasswordValid) {
         setIsLoading(false);
-        setErrorMessage('Kata sandi atau PIN salah. Silakan periksa kembali kata sandi Anda.');
+        setErrorMessage('Kata sandi atau PIN salah. Untuk Siswa, default PIN adalah 123.');
         return;
       }
 
@@ -232,7 +308,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   Masuk ke Akun Anda
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Masukkan Email, Username, atau NIPD beserta kata sandi/PIN Anda.
+                  Siswa dapat login menggunakan <strong>NISN</strong> (10 digit) atau <strong>NIPD</strong> (PIN default: 123).
                 </p>
               </div>
 
@@ -248,7 +324,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    Email, Username, atau NIPD Siswa
+                    NISN, NIPD, Email, atau Username
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -258,7 +334,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       id="input-login-identifier"
                       type="text"
                       required
-                      placeholder="Contoh: absensirapot@gmail.com atau NIPD: 26.27.10.021"
+                      placeholder="Masukkan NISN (10 digit), NIPD, atau Email/Username"
                       value={identifier}
                       onChange={(e) => {
                         setIdentifier(e.target.value);

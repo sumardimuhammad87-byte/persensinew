@@ -240,27 +240,60 @@ export function removeStudentUserAccount(
 export function generateMassStudentAccounts(students: Student[], existingUsers: UserAccount[]): { updatedUsers: UserAccount[]; countAdded: number } {
   let countAdded = 0;
   const userMap = new Map<string, UserAccount>();
+  const userNipdSet = new Set<string>();
+  const userNisnSet = new Set<string>();
+
   existingUsers.forEach(u => {
-    if (u.nipd) userMap.set(u.nipd, u);
-    else userMap.set(u.id, u);
+    userMap.set(u.id, u);
+    if (u.nipd) {
+      userNipdSet.add(u.nipd.trim().toLowerCase());
+      userNipdSet.add(u.nipd.replace(/[^a-zA-Z0-9]/g, '').toLowerCase());
+    }
+    if (u.nisn) {
+      userNisnSet.add(u.nisn.trim().toLowerCase());
+      userNisnSet.add(u.nisn.replace(/\D/g, ''));
+    }
+    if (u.username) {
+      userNipdSet.add(u.username.trim().toLowerCase());
+      userNipdSet.add(u.username.replace(/[^a-zA-Z0-9]/g, '').toLowerCase());
+    }
   });
 
   students.forEach(std => {
-    if (!userMap.has(std.nipd)) {
+    const cleanNipd = std.nipd.trim();
+    const cleanNipdLower = cleanNipd.toLowerCase();
+    const cleanNipdAlpha = cleanNipd.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const cleanNisn = std.nisn?.trim().toLowerCase();
+    const cleanNisnDigits = cleanNisn ? cleanNisn.replace(/\D/g, '') : '';
+
+    const hasAccount =
+      userNipdSet.has(cleanNipdLower) ||
+      userNipdSet.has(cleanNipdAlpha) ||
+      (cleanNisn && userNisnSet.has(cleanNisn)) ||
+      (cleanNisnDigits && userNisnSet.has(cleanNisnDigits));
+
+    if (!hasAccount) {
       countAdded++;
+      const accountId = `USR-STD-${cleanNipd.replace(/[^a-zA-Z0-9]/g, '')}`;
       const newUser: UserAccount = {
-        id: `USR-STD-${std.nipd.replace(/[^a-zA-Z0-9]/g, '')}`,
-        email: `${std.nipd.replace(/[^a-zA-Z0-9]/g, '')}@siswa.sch.id`,
-        username: std.nipd,
+        id: accountId,
+        email: `${cleanNipd.replace(/[^a-zA-Z0-9]/g, '')}@siswa.sch.id`,
+        username: std.nisn || cleanNipd,
         nama: std.nama,
         role: 'siswa',
         password: '123', // default PIN / password for student
-        nipd: std.nipd,
+        nipd: cleanNipd,
+        nisn: std.nisn,
         rombelId: std.rombelId,
         jabatan: `Siswa`,
-        statusAktif: true,
+        foto: std.foto,
+        statusAktif: std.statusAktif !== false,
       };
-      userMap.set(std.nipd, newUser);
+      userMap.set(accountId, newUser);
+      userNipdSet.add(cleanNipdLower);
+      userNipdSet.add(cleanNipdAlpha);
+      if (cleanNisn) userNisnSet.add(cleanNisn);
+      if (cleanNisnDigits) userNisnSet.add(cleanNisnDigits);
     }
   });
 
@@ -276,34 +309,15 @@ export function generateAttendanceRecordId(nipd: string, tanggal: string): strin
 }
 
 // 5. Attendance
-export const OFFICIAL_ATTENDANCE_START_DATE = '2026-09-14';
-
 export function loadAttendanceRecords(): AttendanceRecord[] {
   try {
     const raw = localStorage.getItem(KEYS.ATTENDANCE);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        // Filter out legacy dummy seeds and ghost records before official start date (2026-09-14)
+        // Keep all valid records across any dates, only filtering corrupted entries
         const cleanList = parsed.filter((r) => {
           if (!r || !r.nipd || !r.tanggal || !r.status) return false;
-          // Purge records prior to official launch date
-          if (r.tanggal < OFFICIAL_ATTENDANCE_START_DATE) {
-            return false;
-          }
-          // Purge legacy hardcoded mock seed
-          if (
-            r.keterangan === 'Tepat waktu via scan QR kartu' &&
-            ['06:48:12', '06:51:30', '06:55:04', '07:02:15', '07:11:42'].includes(r.waktu)
-          ) {
-            return false;
-          }
-          if (
-            (r.keterangan === 'Surat keterangan dokter' && r.waktu === '07:15:00' && r.status === 'sakit') ||
-            (r.keterangan === 'Izin keperluan keluarga' && r.waktu === '07:15:00' && r.status === 'izin')
-          ) {
-            return false;
-          }
           return true;
         });
 
@@ -713,22 +727,24 @@ export function saveTeacherAttendanceRecords(records: TeacherAttendanceRecord[])
 
 export function recordTeacherAttendance(
   record: TeacherAttendanceRecord,
-  existingRecords: TeacherAttendanceRecord[] = []
+  existingRecords?: TeacherAttendanceRecord[]
 ): TeacherAttendanceRecord[] {
+  const currentList =
+    existingRecords && existingRecords.length > 0 ? existingRecords : loadTeacherAttendanceRecords();
   const cleanId = record.id || `TATT-${record.tanggal}-${record.teacherId}`;
   const recordWithId = { ...record, id: cleanId };
 
   // Check if existing record for this teacher on this date
-  const idx = existingRecords.findIndex(
+  const idx = currentList.findIndex(
     (r) => r.id === cleanId || (r.teacherId === record.teacherId && r.tanggal === record.tanggal)
   );
 
   let updated: TeacherAttendanceRecord[];
   if (idx >= 0) {
-    updated = [...existingRecords];
+    updated = [...currentList];
     updated[idx] = { ...updated[idx], ...recordWithId };
   } else {
-    updated = [recordWithId, ...existingRecords];
+    updated = [recordWithId, ...currentList];
   }
 
   saveTeacherAttendanceRecords(updated);
@@ -737,9 +753,11 @@ export function recordTeacherAttendance(
 
 export function deleteTeacherAttendanceRecord(
   id: string,
-  existingRecords: TeacherAttendanceRecord[] = []
+  existingRecords?: TeacherAttendanceRecord[]
 ): TeacherAttendanceRecord[] {
-  const filtered = existingRecords.filter((r) => r.id !== id);
+  const currentList =
+    existingRecords && existingRecords.length > 0 ? existingRecords : loadTeacherAttendanceRecords();
+  const filtered = currentList.filter((r) => r.id !== id);
   saveTeacherAttendanceRecords(filtered);
   return filtered;
 }

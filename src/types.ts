@@ -35,6 +35,7 @@ export interface UserAccount {
   role: UserRole;
   password?: string;
   nipd?: string;       // For student / class officers
+  nisn?: string;       // For student NISN login
   teacherId?: string;  // For teachers (Foreign Key to Teacher)
   rombelId?: string;   // For walas, ketua_kelas, sekretaris, siswa
   jabatan?: string;

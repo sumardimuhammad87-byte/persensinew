@@ -80,6 +80,7 @@ import {
   firestoreRestoreFullBackup,
   firestoreSaveTeacherAttendance,
   firestoreDeleteTeacherAttendance,
+  forceSyncAllFromCloud,
 } from './utils/firestoreSync';
 
 // Subcomponents
@@ -136,6 +137,7 @@ import {
   Cake,
   PartyPopper,
   Briefcase,
+  RefreshCw,
 } from 'lucide-react';
 
 export default function App() {
@@ -247,6 +249,21 @@ export default function App() {
   // Options: 'attendance', 'students', 'rombel', 'users', 'reports', 'student_portal', 'teacher_portal'
   const [activeTab, setActiveTab] = useState<string>('attendance');
 
+  // Safeguard: Role-based strict tab access control
+  useEffect(() => {
+    if (!currentUser) return;
+    if (currentUser.role === 'guru') {
+      const allowedGuruTabs = ['attendance', 'teacher_portal', 'schedules'];
+      if (!allowedGuruTabs.includes(activeTab)) {
+        setActiveTab('attendance');
+      }
+    } else if (currentUser.role === 'siswa') {
+      if (activeTab !== 'student_portal') {
+        setActiveTab('student_portal');
+      }
+    }
+  }, [currentUser, activeTab]);
+
   // Modals state
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isTokenManagerOpen, setIsTokenManagerOpen] = useState(false);
@@ -311,6 +328,7 @@ export default function App() {
 
   // Real-time Cloud Sync with Firebase Firestore (Persists across devices)
   const [isCloudSynced, setIsCloudSynced] = useState<boolean>(false);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(() => {
     try {
       const cfg = localStorage.getItem('absensi_school_config_v1');
@@ -321,6 +339,33 @@ export default function App() {
     } catch {}
     return true;
   });
+
+  const handleManualForceSync = async () => {
+    setIsManualSyncing(true);
+    showToast('Menghubungkan & menyinkronkan data Cloud Firestore...', 'info');
+    const result = await forceSyncAllFromCloud({
+      onStudentsLoaded: (data) => setStudents(data),
+      onRombelsLoaded: (data) => setRombels(data),
+      onUsersLoaded: (data) => setUsers(data),
+      onTeachersLoaded: (data) => setTeachers(data),
+      onSubjectsLoaded: (data) => setSubjects(data),
+      onSchedulesLoaded: (data) => setSchedules(data),
+      onAttendanceLoaded: (data) => setAttendanceRecords(data),
+      onTeacherAttendanceLoaded: (data) => setTeacherAttendanceRecords(data),
+      onTokensLoaded: (data) => setTokens(data),
+      onSchoolConfigLoaded: (data) => setSchoolConfig(data),
+    });
+    setIsManualSyncing(false);
+    if (result.success) {
+      setIsCloudSynced(true);
+      showToast(
+        `Sinkronisasi Cloud Berhasil! (${result.attendanceCount} presensi, ${result.studentsCount} siswa, ${result.teachersCount} guru termuat)`,
+        'success'
+      );
+    } else {
+      showToast(`Gagal sinkronisasi cloud: ${result.error || 'Terjadi gangguan jaringan'}`, 'error');
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = subscribeToFirestore(
@@ -866,14 +911,14 @@ export default function App() {
 
   // Teacher Attendance Handlers (Presensi Guru Mandiri & Sinkronisasi)
   const handleRecordTeacherAttendance = (record: TeacherAttendanceRecord) => {
-    const next = recordTeacherAttendance(record);
+    const next = recordTeacherAttendance(record, teacherAttendanceRecords);
     setTeacherAttendanceRecords(next);
     saveTeacherAttendanceRecords(next);
     firestoreSaveTeacherAttendance(record);
   };
 
   const handleDeleteTeacherAttendance = (recordId: string) => {
-    const next = deleteTeacherAttendanceRecord(recordId);
+    const next = deleteTeacherAttendanceRecord(recordId, teacherAttendanceRecords);
     setTeacherAttendanceRecords(next);
     saveTeacherAttendanceRecords(next);
     firestoreDeleteTeacherAttendance(recordId);
@@ -1169,14 +1214,32 @@ export default function App() {
               </>
             )}
 
-            {/* Cloud Real-Time Sync Indicator */}
-            <div
-              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800 text-[11px] font-semibold text-emerald-300 shadow-xs"
-              title="Data tersimpan & tersinkronisasi antar perangkat secara real-time via Firebase Firestore"
+            {/* Cloud Real-Time Sync Indicator & Manual Sync Action (Mobile & PC) */}
+            <button
+              type="button"
+              id="btn-cloud-sync-status"
+              onClick={handleManualForceSync}
+              disabled={isManualSyncing}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition cursor-pointer shadow-xs ${
+                isCloudSynced
+                  ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-700/80 text-emerald-300'
+                  : 'bg-amber-950/80 hover:bg-amber-900 border-amber-700/80 text-amber-300'
+              } ${isManualSyncing ? 'opacity-70 cursor-wait' : ''}`}
+              title="Klik untuk sinkronkan data secara langsung dengan Firebase Firestore (HP ↔ PC)"
             >
-              <span className={`w-2 h-2 rounded-full ${isCloudSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-              <span>{isCloudSynced ? 'Cloud Sync Aktif' : 'Menghubungkan Cloud...'}</span>
-            </div>
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  isManualSyncing
+                    ? 'animate-spin text-emerald-300'
+                    : isCloudSynced
+                    ? 'text-emerald-400'
+                    : 'text-amber-400'
+                }`}
+              />
+              <span className="hidden sm:inline">
+                {isManualSyncing ? 'Menyinkronkan...' : isCloudSynced ? 'Cloud Sinkron' : 'Sinkron Cloud'}
+              </span>
+            </button>
 
             {/* Current User Badge & Profile Photo */}
             <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
@@ -1260,8 +1323,8 @@ export default function App() {
                     Presensi Per Kelas
                   </button>
 
-                  {/* TAB: CRUD & Koreksi Absen (Admin & Walas/Guru) */}
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {/* TAB: CRUD & Koreksi Absen (Admin Only) */}
+                  {currentUser.role === 'admin' && (
                     <button
                       id="tab-nav-manage-attendance"
                       onClick={() => setActiveTab('manage_attendance')}
@@ -1277,21 +1340,24 @@ export default function App() {
                     </button>
                   )}
 
-                  <button
-                    id="tab-nav-students"
-                    onClick={() => setActiveTab('students')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
-                      activeTab === 'students'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                    }`}
-                  >
-                    <Users className="w-4 h-4" />
-                    Data Siswa ({students.length})
-                  </button>
+                  {/* TAB: Data Siswa (Admin & Walas Saja - Guru hanya melihat presensi kelas yang diampu) */}
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
+                    <button
+                      id="tab-nav-students"
+                      onClick={() => setActiveTab('students')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
+                        activeTab === 'students'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      <Users className="w-4 h-4" />
+                      Data Siswa ({students.length})
+                    </button>
+                  )}
 
-                  {/* TAB: CRUD Akun Siswa (Admin, Walas, Guru) */}
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {/* TAB: CRUD Akun Siswa (Admin & Walas Saja) */}
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
                     <button
                       id="tab-nav-student-accounts"
                       onClick={() => setActiveTab('student_accounts')}
@@ -1306,8 +1372,8 @@ export default function App() {
                     </button>
                   )}
 
-                  {/* TAB: CRUD Data Guru (Admin & Guru) */}
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                  {/* TAB: CRUD Data Guru (Admin Saja - Guru lain tidak bisa melihat) */}
+                  {currentUser.role === 'admin' && (
                     <button
                       id="tab-nav-teachers"
                       onClick={() => setActiveTab('teachers')}
@@ -1322,8 +1388,8 @@ export default function App() {
                     </button>
                   )}
 
-                  {/* TAB: Akun & Jadwal Guru (Admin & Guru) */}
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                  {/* TAB: Akun & Jadwal Guru / Portal Guru (Admin, Guru, & Walas) */}
+                  {(currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
                     <button
                       id="tab-nav-teacher-portal"
                       onClick={() => setActiveTab('teacher_portal')}
@@ -1334,7 +1400,7 @@ export default function App() {
                       }`}
                     >
                       <Briefcase className="w-4 h-4 text-emerald-400" />
-                      {currentUser.role === 'guru' ? 'Akun & Jadwal Guru' : 'Portal Guru'}
+                      {currentUser.role === 'admin' ? 'Portal Guru' : 'Akun & Jadwal Guru'}
                     </button>
                   )}
 
@@ -1367,8 +1433,8 @@ export default function App() {
                     </button>
                   )}
 
-                  {/* TAB: Kelola Seluruh Akun Pengguna */}
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {/* TAB: Kelola Seluruh Akun Pengguna (Admin Saja - Guru & Walas Tidak Memiliki Akses) */}
+                  {currentUser.role === 'admin' && (
                     <button
                       id="tab-nav-users"
                       onClick={() => setActiveTab('users')}
@@ -1383,7 +1449,7 @@ export default function App() {
                     </button>
                   )}
 
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
                     <button
                       id="tab-nav-reports"
                       onClick={() => setActiveTab('reports')}
@@ -1400,7 +1466,6 @@ export default function App() {
 
                   {/* TAB: Cetak Kartu Absen Siswa (ID Card / KTP) */}
                   {(currentUser.role === 'admin' ||
-                    currentUser.role === 'guru' ||
                     currentUser.role === 'walas' ||
                     currentUser.role === 'ketua_kelas' ||
                     currentUser.role === 'sekretaris') && (
@@ -1550,7 +1615,7 @@ export default function App() {
                     <UserCheck className="w-4 h-4" />
                     Presensi Per Kelas
                   </button>
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {currentUser.role === 'admin' && (
                     <button
                       onClick={() => {
                         setActiveTab('manage_attendance');
@@ -1564,19 +1629,21 @@ export default function App() {
                       Koreksi & CRUD Absen
                     </button>
                   )}
-                  <button
-                    onClick={() => {
-                      setActiveTab('students');
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className={`w-full text-left py-2 px-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
-                      activeTab === 'students' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Users className="w-4 h-4" />
-                    Data Siswa ({students.length})
-                  </button>
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
+                    <button
+                      onClick={() => {
+                        setActiveTab('students');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full text-left py-2 px-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+                        activeTab === 'students' ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <Users className="w-4 h-4" />
+                      Data Siswa ({students.length})
+                    </button>
+                  )}
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
                     <button
                       onClick={() => {
                         setActiveTab('student_accounts');
@@ -1590,7 +1657,7 @@ export default function App() {
                       Akun Siswa
                     </button>
                   )}
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                  {currentUser.role === 'admin' && (
                     <button
                       onClick={() => {
                         setActiveTab('teachers');
@@ -1604,7 +1671,7 @@ export default function App() {
                       Data Guru ({teachers.length})
                     </button>
                   )}
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru') && (
+                  {(currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
                     <button
                       onClick={() => {
                         setActiveTab('teacher_portal');
@@ -1615,7 +1682,7 @@ export default function App() {
                       }`}
                     >
                       <Briefcase className="w-4 h-4 text-emerald-400" />
-                      {currentUser.role === 'guru' ? 'Akun & Jadwal Guru' : 'Portal Guru'}
+                      {currentUser.role === 'admin' ? 'Portal Guru' : 'Akun & Jadwal Guru'}
                     </button>
                   )}
                   <button
@@ -1644,7 +1711,7 @@ export default function App() {
                       Kelola Rombel
                     </button>
                   )}
-                  {(currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+                  {currentUser.role === 'admin' && (
                     <button
                       onClick={() => {
                         setActiveTab('users');
@@ -1658,7 +1725,7 @@ export default function App() {
                       Akun Pengguna
                     </button>
                   )}
-                  {(currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
+                  {(currentUser.role === 'admin' || currentUser.role === 'walas') && (
                     <button
                       onClick={() => {
                         setActiveTab('reports');
@@ -1673,7 +1740,6 @@ export default function App() {
                     </button>
                   )}
                   {(currentUser.role === 'admin' ||
-                    currentUser.role === 'guru' ||
                     currentUser.role === 'walas' ||
                     currentUser.role === 'ketua_kelas' ||
                     currentUser.role === 'sekretaris') && (
@@ -1837,8 +1903,8 @@ export default function App() {
           />
         )}
 
-        {/* TAB 2: Manage Students Master Tab */}
-        {activeTab === 'students' && (
+        {/* TAB 2: Manage Students Master Tab (Admin & Walas Only) */}
+        {activeTab === 'students' && (currentUser.role === 'admin' || currentUser.role === 'walas') && (
           <ManageStudentsTab
             currentUser={currentUser}
             students={students}
@@ -1851,8 +1917,8 @@ export default function App() {
           />
         )}
 
-        {/* TAB 2B: CRUD Akun Siswa (Dedicated Student Accounts CRUD) */}
-        {activeTab === 'student_accounts' && (currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+        {/* TAB 2B: CRUD Akun Siswa (Admin & Walas Only) */}
+        {activeTab === 'student_accounts' && (currentUser.role === 'admin' || currentUser.role === 'walas') && (
           <ManageStudentAccountsTab
             currentUser={currentUser}
             users={users}
@@ -1871,8 +1937,8 @@ export default function App() {
           />
         )}
 
-        {/* TAB 2C: CRUD Data Guru (Master Guru CRUD) */}
-        {activeTab === 'teachers' && (currentUser.role === 'admin' || currentUser.role === 'guru') && (
+        {/* TAB 2C: CRUD Data Guru (Admin Saja - Guru Tidak Bisa Melihat Guru Lain) */}
+        {activeTab === 'teachers' && currentUser.role === 'admin' && (
           <ManageTeachersTab
             currentUser={currentUser}
             teachers={teachers}
@@ -1891,8 +1957,8 @@ export default function App() {
           />
         )}
 
-        {/* TAB 2E: Akun & Jadwal Guru (Kehadiran Masing-Masing Guru & Status Jam Mengajar) */}
-        {activeTab === 'teacher_portal' && (currentUser.role === 'admin' || currentUser.role === 'guru') && (
+        {/* TAB 2E: Akun & Jadwal Guru (Admin, Guru, & Walas) */}
+        {activeTab === 'teacher_portal' && (currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
           <TeacherPortalTab
             currentUser={currentUser}
             teachers={teachers}
@@ -1945,8 +2011,8 @@ export default function App() {
           />
         )}
 
-        {/* TAB 4: Manage Users & Accounts Tab (CRUD Pengguna & Koreksi Nama) */}
-        {activeTab === 'users' && (currentUser.role === 'admin' || currentUser.role === 'walas' || currentUser.role === 'guru') && (
+        {/* TAB 4: Manage Users & Accounts Tab (Admin Saja - Guru & Walas Tidak Memiliki Akses) */}
+        {activeTab === 'users' && currentUser.role === 'admin' && (
           <ManageUsersTab
             currentUser={currentUser}
             users={users}
@@ -1968,7 +2034,7 @@ export default function App() {
         )}
 
         {/* TAB 5: Reports & Printing Tab */}
-        {activeTab === 'reports' && (currentUser.role === 'admin' || currentUser.role === 'guru' || currentUser.role === 'walas') && (
+        {activeTab === 'reports' && (currentUser.role === 'admin' || currentUser.role === 'walas') && (
           <ReportsPrintTab
             currentUser={currentUser}
             students={students}
